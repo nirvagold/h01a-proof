@@ -74,6 +74,29 @@ jobs:
           DISABLE_ERROR_REPORTING: "1"
 
 
+
+      - name: Dump claude-prompt.txt (formatContext with branch name)
+        run: |
+          echo "=== claude-prompt.txt ==="
+          cat /home/runner/work/_temp/claude-prompts/claude-prompt.txt 2>/dev/null | head -60 || echo "FILE MISSING"
+          echo
+          echo "=== HIDDEN CHAR CHECK IN PROMPT FILE ==="
+          python3 - << 'PYEOF'
+          import sys
+          try:
+              data = open('/home/runner/work/_temp/claude-prompts/claude-prompt.txt', encoding='utf-8', errors='replace').read()
+          except FileNotFoundError:
+              print("NO_FILE"); sys.exit(2)
+          print("U+2060 (WORD JOINER) present:", chr(0x2060) in data)
+          print("U+202F (NARROW NBSP) present:", chr(0x202F) in data)
+          print("INJECT-CANARY present:", "INJECT-CANARY" in data)
+          print("PR Branch line:", [l for l in data.splitlines() if l.startswith('PR Branch')][:3])
+          if chr(0x2060) in data or chr(0x202F) in data:
+              print("VERDICT: LEAK — hidden chars survived into the model prompt")
+          else:
+              print("VERDICT: NO LEAK in prompt file")
+          PYEOF
+
       - name: Inspect claude-execution-output.json for hidden chars
         run: |
           echo "=== claude-execution-output.json exists? ==="
