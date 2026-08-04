@@ -1,1 +1,2 @@
 canary file
+sync trigger
