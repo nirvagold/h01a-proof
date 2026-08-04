@@ -2,3 +2,4 @@ canary file
 sync trigger
 retry2
 retry3
+retry4
