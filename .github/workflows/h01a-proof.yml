@@ -1,7 +1,7 @@
 name: H01a Clean Proof
 on:
   pull_request:
-    types: [opened]
+    types: [opened, synchronize, labeled, reopened]
 
 jobs:
   proof:
