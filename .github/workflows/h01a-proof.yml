@@ -1,4 +1,4 @@
-name: H01a Tag Mode Proof
+name: H01b Label Injection Proof
 on:
   issue_comment:
     types: [created]
@@ -14,36 +14,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Claude Code Action (tag mode — formatContext interpolates branch)
+      - name: Run Claude Code Action (tag mode - formatContext interpolates PR Labels)
         uses: anthropics/claude-code-action@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          anthropic_api_key: sk-ant-test-mock
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
         env:
-          ANTHROPIC_BASE_URL: http://127.0.0.1:18001
-          ANTHROPIC_API_KEY: sk-ant-test-mock
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
           DISABLE_TELEMETRY: "1"
           DISABLE_ERROR_REPORTING: "1"
 
-      - name: Dump claude-prompt.txt (formatContext with branch name)
+      - name: Dump claude-prompt.txt (formatContext with PR Labels)
+        if: always()
         run: |
-          echo "=== claude-prompt.txt ==="
-          cat /home/runner/work/_temp/claude-prompts/claude-prompt.txt 2>/dev/null | head -60 || echo "FILE MISSING"
+          echo "=== prompt files found ==="
+          find /home/runner/work/_temp -name 'claude-*.txt' 2>/dev/null
           echo
-          echo "=== HIDDEN CHAR CHECK IN PROMPT FILE ==="
+          echo "=== claude-prompt.txt (first 80 lines) ==="
+          cat /home/runner/work/_temp/claude-prompts/claude-prompt.txt 2>/dev/null | head -80 || echo "PROMPT FILE MISSING"
+          echo
+          echo "=== HIDDEN CHAR / CANARY CHECK ==="
           python3 - << 'PYEOF'
-          import sys
-          try:
-              data = open('/home/runner/work/_temp/claude-prompts/claude-prompt.txt', encoding='utf-8', errors='replace').read()
-          except FileNotFoundError:
-              print("NO_FILE"); sys.exit(2)
-          print("U+2060 (WORD JOINER) present:", chr(0x2060) in data)
-          print("U+202F (NARROW NBSP) present:", chr(0x202F) in data)
-          print("INJECT-CANARY present:", "INJECT-CANARY" in data)
-          print("PR Branch lines:", [l for l in data.splitlines() if 'PR Branch' in l][:3])
-          if chr(0x2060) in data or chr(0x202F) in data:
-              print("VERDICT: LEAK — hidden chars survived into the model prompt")
-          else:
-              print("VERDICT: NO LEAK in prompt file")
+          import sys, glob
+          files = glob.glob('/home/runner/work/_temp/**/claude-*.txt', recursive=True)
+          if not files:
+              print("NO_PROMPT_FILE"); sys.exit(2)
+          for f in files:
+              print("---", f)
+              data = open(f, encoding='utf-8', errors='replace').read()
+              print("  U+2060 (WORD JOINER) present:", chr(0x2060) in data)
+              print("  U+202F (NARROW NBSP) present:", chr(0x202F) in data)
+              print("  INJECT-CANARY substring present:", "INJECT-CANARY" in data)
+              print("  PR Labels lines:", [l for l in data.splitlines() if 'PR Labels' in l][:3])
+              if chr(0x2060) in data or chr(0x202F) in data:
+                  print("  VERDICT: LEAK - hidden chars survived into the model prompt")
+              else:
+                  print("  VERDICT: NO LEAK in prompt file")
           PYEOF
+
+      - name: Grep runner for canary (all files)
+        if: always()
+        run: |
+          echo "=== grep INJECT-CANARY across runner temp ==="
+          grep -r --text -l "INJECT-CANARY" /home/runner/work/_temp/ 2>/dev/null | head -20 || echo "no matches"
+          echo "=== grep PR Labels with unicode across runner temp ==="
+          grep -r --text -l "PR Labels" /home/runner/work/_temp/ 2>/dev/null | head -20 || echo "no matches"
