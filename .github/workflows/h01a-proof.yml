@@ -63,6 +63,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           anthropic_api_key: sk-ant-test-mock
+          prompt: "Review the PR."
         env:
           ANTHROPIC_BASE_URL: http://127.0.0.1:18001
           ANTHROPIC_API_KEY: sk-ant-test-mock
