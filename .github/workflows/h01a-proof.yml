@@ -1,0 +1,93 @@
+name: H01a Clean Proof
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start mock Anthropic API
+        run: |
+          cat > mock.js << 'MOCKEOF'
+          const http = require('http');
+          const fs = require('fs');
+          const LOG = 'mock-requests.log';
+          const PORT = 18001;
+          function sse(res, events) {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' });
+            for (const [ev, data] of events) res.write(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`);
+            res.end();
+          }
+          const server = http.createServer((req, res) => {
+            let body = '';
+            req.on('data', (c) => (body += c));
+            req.on('end', () => {
+              fs.appendFileSync(LOG, JSON.stringify({ ts: new Date().toISOString(), method: req.method, url: req.url, body_head: body.slice(0, 6000) }) + '\n');
+              const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+              if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, {'Content-Type':'application/json'}); res.end(JSON.stringify({ok:true})); return; }
+              if (req.method === 'POST' && url.pathname === '/v1/messages') {
+                let p = {}; try { p = JSON.parse(body); } catch(e) {}
+                const cmd = 'echo PWNED-H01A >> pwned.txt';
+                if (p.stream) {
+                  sse(res, [
+                    ['message_start', { type:'message_start', message:{ id:'msg1', type:'message', role:'assistant', content:[], model:'claude-sonnet-4-20250514', stop_reason:null, usage:{input_tokens:10,output_tokens:1} } }],
+                    ['content_block_start', { type:'content_block_start', index:0, content_block:{ type:'tool_use', id:'toolu1', name:'Bash', input:{} } }],
+                    ['content_block_delta', { type:'content_block_delta', index:0, delta:{ type:'input_json_delta', partial_json: JSON.stringify({command: cmd}) } }],
+                    ['content_block_stop', { type:'content_block_stop', index:0 }],
+                    ['message_delta', { type:'message_delta', delta:{ stop_reason:'tool_use', stop_sequence:null }, usage:{output_tokens:12} }],
+                    ['message_stop', { type:'message_stop' }]
+                  ]);
+                } else {
+                  res.writeHead(200, {'Content-Type':'application/json'});
+                  res.end(JSON.stringify({ id:'msg1', type:'message', role:'assistant', content:[{type:'tool_use', id:'toolu1', name:'Bash', input:{command:cmd}}], model:'claude-sonnet-4-20250514', stop_reason:'tool_use', usage:{input_tokens:10, output_tokens:12} }));
+                }
+                return;
+              }
+              if (req.method === 'POST' && url.pathname.includes('count_tokens')) { res.writeHead(200, {'Content-Type':'application/json'}); res.end(JSON.stringify({input_tokens:10})); return; }
+              if (req.method === 'GET' && url.pathname.includes('/models')) { res.writeHead(200, {'Content-Type':'application/json'}); res.end(JSON.stringify({data:[{id:'claude-sonnet-4-20250514',type:'model'}]})); return; }
+              res.writeHead(404, {'Content-Type':'application/json'}); res.end(JSON.stringify({error:{type:'not_found_error',message:'mock: ' + req.method + ' ' + url.pathname}}));
+            });
+          });
+          server.listen(PORT, '127.0.0.1', () => console.log('mock on ' + PORT));
+          MOCKEOF
+          node mock.js &
+          echo $! > mock.pid
+          sleep 2
+          curl -s http://127.0.0.1:18001/ || true
+
+      - name: Run Claude Code Action (no custom prompt — internal formatContext only)
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_api_key: sk-ant-test-mock
+        env:
+          ANTHROPIC_BASE_URL: http://127.0.0.1:18001
+          ANTHROPIC_API_KEY: sk-ant-test-mock
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          DISABLE_TELEMETRY: "1"
+          DISABLE_ERROR_REPORTING: "1"
+
+      - name: Inspect mock request log for hidden chars
+        run: |
+          echo "=== mock-requests.log ==="
+          cat mock-requests.log 2>/dev/null | head -5 || echo "LOG MISSING"
+          echo
+          echo "=== HIDDEN CHAR CHECK ==="
+          python3 - << 'PYEOF'
+          import sys
+          try:
+              data = open('mock-requests.log', encoding='utf-8', errors='replace').read()
+          except FileNotFoundError:
+              print("NO_LOG: mock never received a request"); sys.exit(2)
+          print("U+2060 (WORD JOINER) present in model request:", chr(0x2060) in data)
+          print("U+202F (NARROW NBSP) present in model request:", chr(0x202F) in data)
+          print("INJECT-CANARY present:", "INJECT-CANARY" in data)
+          print("branch context present:", "PR Branch" in data)
+          if chr(0x2060) in data and chr(0x202F) in data:
+              print("VERDICT: LEAK — hidden chars reached the model request")
+          else:
+              print("VERDICT: NO LEAK — hidden chars NOT in model request (sanitized or not interpolated)")
+          PYEOF
